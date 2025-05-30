@@ -6,7 +6,7 @@ const cheerio = require('cheerio');
 // Add port configuration for deployment
 const PORT = process.env.PORT || 3000;
 
-console.log('🚀 Starting enhanced Workline search app...');
+console.log('🚀 Starting enhanced Workline search app with Google Search...');
 
 const app = new App({
     token: process.env.SLACK_BOT_TOKEN,
@@ -19,6 +19,11 @@ const app = new App({
 const articleCache = new Map();
 let lastCacheTime = null;
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+
+// Google Custom Search configuration
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID;
+const WORKLINE_SITE = 'www.flexos.work/the-workline/';
 
 // Enhanced article scraper
 async function scrapeArticle(url) {
@@ -123,6 +128,129 @@ async function scrapeArticle(url) {
     }
 }
 
+// Google Custom Search function
+async function searchWithGoogle(query) {
+    if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) {
+        console.log('⚠️ Google Search not configured, using local cache only');
+        return [];
+    }
+    
+    try {
+        console.log(`🔍 Searching Google for: "${query}"`);
+        
+        const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_CSE_ID}&q=${encodeURIComponent(query)}&num=10`;
+        
+        const response = await axios.get(searchUrl, { timeout: 10000 });
+        
+        if (!response.data.items) {
+            console.log('📭 No Google results found');
+            return [];
+        }
+        
+        console.log(`📊 Google found ${response.data.items.length} results`);
+        
+        // Process Google results
+        const results = await Promise.all(
+            response.data.items.slice(0, 5).map(async (item) => {
+                // Check if we have this article cached
+                let articleData = articleCache.get(item.link);
+                
+                if (!articleData) {
+                    // Scrape it fresh
+                    articleData = await scrapeArticle(item.link);
+                    if (articleData && articleData.title !== 'Article') {
+                        articleCache.set(item.link, articleData);
+                    }
+                }
+                
+                return {
+                    url: item.link,
+                    title: articleData?.title || item.title,
+                    summary: articleData?.summary || item.snippet,
+                    topics: articleData?.topics || [],
+                    publishDate: articleData?.publishDate,
+                    source: 'google',
+                    score: 10 // Google results get high relevance score
+                };
+            })
+        );
+        
+        return results.filter(result => result !== null);
+        
+    } catch (error) {
+        console.error('❌ Google Search error:', error.message);
+        return [];
+    }
+}
+
+// Local cache search function
+async function searchCachedArticles(query) {
+    // Refresh cache if needed
+    if (!lastCacheTime || Date.now() - lastCacheTime > CACHE_DURATION) {
+        await refreshArticleCache();
+    }
+    
+    const queryTerms = query.toLowerCase().split(' ').filter(term => term.length > 2);
+    const results = [];
+    
+    for (const [url, article] of articleCache.entries()) {
+        let score = 0;
+        const searchableText = `${article.title} ${article.summary} ${article.content}`.toLowerCase();
+        
+        // Scoring system
+        queryTerms.forEach(term => {
+            // Title matches are most important
+            if (article.title.toLowerCase().includes(term)) {
+                score += 5;
+            }
+            // Summary matches are important
+            if (article.summary.toLowerCase().includes(term)) {
+                score += 3;
+            }
+            // Topic matches are good
+            if (article.topics.some(topic => topic.includes(term))) {
+                score += 2;
+            }
+            // Content matches count
+            const contentMatches = (searchableText.match(new RegExp(term, 'g')) || []).length;
+            score += Math.min(contentMatches, 3); // Cap content score
+        });
+        
+        if (score > 0) {
+            results.push({ ...article, score, source: 'cache' });
+        }
+    }
+    
+    return results.sort((a, b) => b.score - a.score);
+}
+
+// Main search function that combines Google + cache
+async function searchWorklineArticles(query) {
+    console.log(`🔍 Searching for: "${query}"`);
+    
+    // Always try Google search first (more comprehensive)
+    const googleResults = await searchWithGoogle(query);
+    
+    // Also search local cache
+    const cacheResults = await searchCachedArticles(query);
+    
+    // Combine and deduplicate results
+    const allResults = [...googleResults];
+    
+    // Add cache results that aren't already in Google results
+    cacheResults.forEach(cacheResult => {
+        const alreadyExists = allResults.some(result => result.url === cacheResult.url);
+        if (!alreadyExists) {
+            allResults.push(cacheResult);
+        }
+    });
+    
+    // Sort by score and return top 5
+    return allResults
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5);
+}
+
 // Discover articles and build cache
 async function refreshArticleCache() {
     try {
@@ -196,54 +324,6 @@ async function refreshArticleCache() {
     }
 }
 
-// Smart search function
-async function searchWorklineArticles(query) {
-    // Refresh cache if needed
-    if (!lastCacheTime || Date.now() - lastCacheTime > CACHE_DURATION) {
-        await refreshArticleCache();
-    }
-    
-    if (articleCache.size === 0) {
-        console.log('⚠️ No articles in cache, attempting fresh search...');
-        await refreshArticleCache();
-    }
-    
-    const queryTerms = query.toLowerCase().split(' ').filter(term => term.length > 2);
-    const results = [];
-    
-    for (const [url, article] of articleCache.entries()) {
-        let score = 0;
-        const searchableText = `${article.title} ${article.summary} ${article.content}`.toLowerCase();
-        
-        // Scoring system
-        queryTerms.forEach(term => {
-            // Title matches are most important
-            if (article.title.toLowerCase().includes(term)) {
-                score += 5;
-            }
-            // Summary matches are important
-            if (article.summary.toLowerCase().includes(term)) {
-                score += 3;
-            }
-            // Topic matches are good
-            if (article.topics.some(topic => topic.includes(term))) {
-                score += 2;
-            }
-            // Content matches count
-            const contentMatches = (searchableText.match(new RegExp(term, 'g')) || []).length;
-            score += Math.min(contentMatches, 3); // Cap content score
-        });
-        
-        if (score > 0) {
-            results.push({ ...article, score });
-        }
-    }
-    
-    return results
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 5); // Return top 5 results
-}
-
 // Format results with Slack blocks for clean appearance
 function formatSearchResults(query, results) {
     const blocks = [
@@ -258,12 +338,15 @@ function formatSearchResults(query, results) {
     ];
 
     results.forEach((result, index) => {
+        // Add search source indicator
+        const sourceEmoji = result.source === 'google' ? '🌐' : '💾';
+        
         // Main article block
         blocks.push({
             type: "section",
             text: {
                 type: "mrkdwn",
-                text: `*<${result.url}|${result.title}>*\n${result.summary}`
+                text: `${sourceEmoji} *<${result.url}|${result.title}>*\n${result.summary}`
             },
             accessory: {
                 type: "button",
@@ -288,6 +371,9 @@ function formatSearchResults(query, results) {
             } catch (e) {
                 // Ignore date parsing errors
             }
+        }
+        if (result.source) {
+            metadata.push(`🔍 ${result.source === 'google' ? 'Google Search' : 'Local Cache'}`);
         }
         
         if (metadata.length > 0) {
@@ -316,7 +402,7 @@ function formatSearchResults(query, results) {
             elements: [
                 {
                     type: "mrkdwn",
-                    text: "💡 *Tip:* Try specific terms like 'change management', 'hybrid work', or 'employee experience' for better results"
+                    text: "💡 *Tip:* 🌐 = Google Search results, 💾 = Local cache results"
                 }
             ]
         }
@@ -332,6 +418,8 @@ app.command('/workline', async ({ command, ack, respond }) => {
     const query = command.text.trim();
     
     if (!query) {
+        const hasGoogleSearch = GOOGLE_API_KEY && GOOGLE_CSE_ID;
+        
         await respond({
             blocks: [
                 {
@@ -346,14 +434,14 @@ app.command('/workline', async ({ command, ack, respond }) => {
                     type: "section",
                     text: {
                         type: "mrkdwn",
-                        text: "*How to search:*\n• `/workline change management` - Find change insights\n• `/workline hybrid work` - Discover hybrid strategies\n• `/workline employee experience` - Explore EX topics\n• `/workline latest` - See recent articles"
+                        text: "*How to search:*\n• `/workline change management` - Find change insights\n• `/workline hybrid work` - Discover hybrid strategies\n• `/workline employee experience` - Explore EX topics\n• `/workline IKEA` - Find specific terms within articles"
                     }
                 },
                 {
                     type: "section",
                     text: {
                         type: "mrkdwn",
-                        text: "*Popular topics:* change management, hybrid work, employee experience, workplace metrics, leadership, innovation, remote work"
+                        text: `*Search powered by:* ${hasGoogleSearch ? '🌐 Google Custom Search + 💾 Local Cache' : '💾 Local Cache Only'}\n*Popular topics:* change management, hybrid work, employee experience, workplace metrics, leadership, innovation`
                     }
                 }
             ]
@@ -418,6 +506,13 @@ app.action(/^read_\d+$/, async ({ ack }) => {
     try {
         console.log('🚀 Starting enhanced Workline app...');
         
+        // Check Google Search configuration
+        if (GOOGLE_API_KEY && GOOGLE_CSE_ID) {
+            console.log('✅ Google Custom Search configured');
+        } else {
+            console.log('⚠️ Google Custom Search not configured - using local cache only');
+        }
+        
         // Pre-load cache (but don't wait too long in production)
         if (process.env.NODE_ENV !== 'production') {
             console.log('📚 Pre-loading article cache...');
@@ -430,8 +525,7 @@ app.action(/^read_\d+$/, async ({ ack }) => {
         
         await app.start(PORT);
         console.log(`⚡️ Enhanced Workline search app is running on port ${PORT}!`);
-        console.log(`📖 Ready to search ${articleCache.size} cached articles`);
-        console.log('💡 Try: /workline change management');
+        console.log(`📖 Ready to search articles`);
         
     } catch (error) {
         console.error('❌ Failed to start app:', error);
