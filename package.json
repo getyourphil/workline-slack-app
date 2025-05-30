@@ -1,0 +1,19 @@
+{
+  "name": "workline-slack-app",
+  "version": "1.0.0",
+  "description": "Slack app for searching Workline articles",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app-enhanced.js",
+    "dev": "nodemon app-enhanced.js",
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.17.1",
+    "axios": "^1.6.7",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.4.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}
