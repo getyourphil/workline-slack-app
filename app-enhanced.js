@@ -501,6 +501,48 @@ app.action(/^read_\d+$/, async ({ ack }) => {
     // Button click acknowledged - could add analytics here
 });
 
+// Handle direct messages to the bot
+app.message(async ({ message, say }) => {
+    // Only respond to direct messages (not channel mentions)
+    if (message.channel_type !== 'im') {
+        return;
+    }
+    
+    const query = message.text.trim();
+    
+    // Ignore empty messages or common greetings
+    if (!query || query.length < 3) {
+        await say("👋 Hi! I can help you search Workline articles. Try asking me something like:\n• \"change management\"\n• \"hybrid work strategies\"\n• \"employee experience tips\"");
+        return;
+    }
+    
+    // Common greetings - respond helpfully
+    if (/^(hi|hello|hey|help)$/i.test(query)) {
+        await say("👋 Hello! I can search Phil Kirschner's Workline articles for you. Just type what you're looking for:\n• \"change management\"\n• \"IKEA furniture example\"\n• \"workplace metrics\"");
+        return;
+    }
+    
+    try {
+        // Show typing indicator
+        await say(`🔍 Searching for "${query}"...`);
+        
+        // Use your existing search function
+        const results = await searchWorklineArticles(query);
+        
+        if (results.length === 0) {
+            await say(`🤷‍♂️ No articles found for "${query}". Try terms like: change management, hybrid work, employee experience, or workplace innovation.`);
+            return;
+        }
+        
+        // Format results for direct message (same as slash command)
+        await say(formatSearchResults(query, results));
+        
+    } catch (error) {
+        console.error('❌ DM search error:', error);
+        await say("Sorry, I encountered an error while searching. Please try again in a moment.");
+    }
+});
+
 // Start the app with initial cache load
 (async () => {
     try {
