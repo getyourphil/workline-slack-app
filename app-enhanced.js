@@ -411,7 +411,7 @@ function formatSearchResults(query, results) {
     return { blocks };
 }
 
-// Main command handler
+// Main slash command handler
 app.command('/workline', async ({ command, ack, respond }) => {
     await ack();
     
@@ -495,12 +495,6 @@ app.command('/workline', async ({ command, ack, respond }) => {
     }
 });
 
-// Handle button clicks (for analytics or future features)
-app.action(/^read_\d+$/, async ({ ack }) => {
-    await ack();
-    // Button click acknowledged - could add analytics here
-});
-
 // Handle direct messages to the bot
 app.message(async ({ message, say }) => {
     // Only respond to direct messages (not channel mentions)
@@ -510,7 +504,7 @@ app.message(async ({ message, say }) => {
     
     const query = message.text.trim();
     
-    // Ignore empty messages or common greetings
+    // Ignore empty messages or very short messages
     if (!query || query.length < 3) {
         await say("👋 Hi! I can help you search Workline articles. Try asking me something like:\n• \"change management\"\n• \"hybrid work strategies\"\n• \"employee experience tips\"");
         return;
@@ -541,6 +535,12 @@ app.message(async ({ message, say }) => {
         console.error('❌ DM search error:', error);
         await say("Sorry, I encountered an error while searching. Please try again in a moment.");
     }
+});
+
+// Handle button clicks (for analytics or future features)
+app.action(/^read_\d+$/, async ({ ack }) => {
+    await ack();
+    // Button click acknowledged - could add analytics here
 });
 
 // Start the app with initial cache load
